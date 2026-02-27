@@ -1,54 +1,80 @@
 <template>
-  <div style="padding: 20px;">
+  <div class="upload-page">
     <el-upload
       ref="uploadRef"
       class="upload-demo"
-      name="upload_file"  
-      action="http://localhost:8000/well/upload" 
-      :auto-upload="false" 
+      name="upload_file"
+      :auto-upload="false"
       list-type="picture"
+      :http-request="customUpload"
       :on-success="handleSuccess"
+      :on-error="handleError"
     >
       <template #trigger>
         <el-button type="primary">选择图片</el-button>
       </template>
-      <el-button type="success" @click="submitUpload" style="margin-left: 10px;">
-        上传并检测
-      </el-button>
+      <el-button type="success" class="upload-btn" @click="submitUpload">上传并检测</el-button>
     </el-upload>
 
-    <!-- 显示结果 -->
-    <div v-if="imageUrl" style="margin-top: 20px;">
-      <h3>检测结果：</h3>
-      <img :src="imageUrl" style="max-height: 300px;" />
+    <div v-if="imageUrl" class="result-card">
+      <h3>检测结果</h3>
+      <img :src="imageUrl" alt="检测图片" class="preview-image" />
       <p>状态：{{ labelText }}</p>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { inject, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 
-const uploadRef = ref()
+import { getCategoryText } from '../constants/categories'
+
+const axios = inject('axios')
+const uploadRef = ref(null)
 const imageUrl = ref('')
 const labelText = ref('')
 
-// 提交上传
 const submitUpload = () => {
-  uploadRef.value.submit()
+  uploadRef.value?.submit()
 }
 
-// 上传成功回调
+const customUpload = async (uploadRequest) => {
+  const formData = new FormData()
+  formData.append('upload_file', uploadRequest.file)
+
+  const response = await axios.post('/well/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+
+  uploadRequest.onSuccess(response.data)
+}
+
 const handleSuccess = (response) => {
-  imageUrl.value = response.path  // 图片路径
-  // 转换状态文本
-  const labelMap = {
-    '[0]': '井盖完好',
-    '[1]': '井盖破损',
-    '[2]': '井盖缺失',
-    '[3]': '井盖未盖',
-    '[4]': '井圈问题'
-  }
-  labelText.value = labelMap[response.label] || '未知状态'
+  imageUrl.value = response.path
+  labelText.value = getCategoryText(response.label)
+  ElMessage.success('检测完成')
+}
+
+const handleError = () => {
+  ElMessage.error('上传或检测失败，请重试')
 }
 </script>
+
+<style scoped>
+.upload-page {
+  padding: 20px;
+}
+
+.upload-btn {
+  margin-left: 10px;
+}
+
+.result-card {
+  margin-top: 20px;
+}
+
+.preview-image {
+  max-height: 300px;
+}
+</style>

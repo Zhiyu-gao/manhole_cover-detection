@@ -1,24 +1,18 @@
-# frontend
+# Frontend (Vue 3)
 
-## Project setup
-```
+This frontend is part of the manhole-cover detection system.
+
+## Scripts
+
+```bash
 npm install
-```
-
-### Compiles and hot-reloads for development
-```
 npm run serve
-```
-
-### Compiles and minifies for production
-```
 npm run build
-```
-
-### Lints and fixes files
-```
 npm run lint
 ```
 
-### Customize configuration
-See [Configuration Reference](https://cli.vuejs.org/config/).
+## Notes
+
+- API base URL can be overridden by `VUE_APP_API_BASE_URL`.
+- Route-level auth guard is configured in `src/router/index.js`.
+- Shared defect-category constants are in `src/constants/categories.js`.

@@ -1,40 +1,50 @@
+"""Serializers for user authentication and user payloads."""
+
 import hashlib
+
 from rest_framework import exceptions, serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
 from .models import User
 
+
 class UserSerializer(serializers.ModelSerializer):
-    """用户信息序列化器"""
+    """Serialize user records."""
+
     class Meta:
         model = User
-        fields = '__all__'  # 返回所有字段
+        fields = "__all__"
+
+
+def _md5_digest(raw_text: str) -> str:
+    return hashlib.md5(raw_text.encode("utf-8")).hexdigest()
+
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """自定义登录序列化器（处理密码加密和用户验证）"""
+    """Custom login serializer for legacy `user` table."""
+
     @classmethod
     def get_token(cls, user):
-        return super().get_token(user)  # 调用父类生成token
+        return super().get_token(user)
 
     def validate(self, attrs):
-        # 前端传的用户名和密码
-        username = attrs.get('username')
-        password = attrs.get('password')
+        username = attrs.get("username")
+        password = attrs.get("password")
 
-        # 密码MD5加密（与PPT一致）
-        m = hashlib.md5()
-        m.update(password.encode("utf-8"))
-        encrypted_pwd = m.hexdigest()
+        if not username or not password:
+            raise exceptions.ValidationError("username and password are required")
 
-        # 验证用户
+        encrypted_pwd = _md5_digest(password)
+
         try:
             user = User.objects.get(username=username, password=encrypted_pwd)
-        except User.DoesNotExist:
-            raise exceptions.AuthenticationFailed('账号或密码错误')
+        except User.DoesNotExist as exc:
+            raise exceptions.AuthenticationFailed("账号或密码错误") from exc
 
-        # 生成token
         refresh = self.get_token(user)
         return {
-            'userId': user.id,
-            'token': str(refresh.access_token),  # 访问令牌
-            'refresh': str(refresh)  # 刷新令牌
+            "userId": user.id,
+            "username": user.username,
+            "token": str(refresh.access_token),
+            "refresh": str(refresh),
         }

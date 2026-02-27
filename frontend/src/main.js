@@ -1,18 +1,17 @@
 import { createApp } from 'vue'
-import App from './App.vue'
-import router from './router'
+import axios from 'axios'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
-import axios from 'axios'
 
-// 配置axios
+import App from './App.vue'
+import router from './router'
+
 const api = axios.create({
-  baseURL: "http://localhost:8000",  // 后端接口地址
-  timeout: 5000
+  baseURL: process.env.VUE_APP_API_BASE_URL || 'http://localhost:8000',
+  timeout: 10000
 })
 
-// 请求拦截器：添加JWT令牌
-api.interceptors.request.use(config => {
+api.interceptors.request.use((config) => {
   const token = sessionStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
@@ -20,20 +19,21 @@ api.interceptors.request.use(config => {
   return config
 })
 
-// 响应拦截器：处理401未授权
 api.interceptors.response.use(
-  res => res,
-  err => {
-    if (err.response && err.response.status === 401) {
-      // 跳转到登录页
-      router.push('/login')
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      sessionStorage.removeItem('token')
+      if (router.currentRoute.value.path !== '/login') {
+        router.push('/login')
+      }
     }
-    return Promise.reject(err)
+    return Promise.reject(error)
   }
 )
 
 const app = createApp(App)
 app.use(router)
 app.use(ElementPlus)
-app.provide('axios', api)  // 全局提供axios
+app.provide('axios', api)
 app.mount('#app')

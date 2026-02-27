@@ -1,113 +1,138 @@
-from django.shortcuts import render
+"""API views for well data, upload inference, and monitor records."""
 
-# DRF 基础导入
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
-from rest_framework import status
+from __future__ import annotations
 
-# 业务模型与序列化
-from .models import Well
-from .serializers import WellSerializer
+import logging
+import uuid
+from pathlib import Path
 
-# 系统与图片处理
-import os
 from django.conf import settings
-from PIL import Image
+from rest_framework import status
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.viewsets import ModelViewSet
 
-import torch
-from torchvision import models, transforms
-from PIL import Image
-import os
+from .inference import InferenceError, predict_image
+from .models import Monitor, Well
+from .serializers import MonitorSerializer, WellSerializer
 
-# 加载模型（只加载一次）
-MODEL_PATH = os.path.join('d:/aaaaaaaaaaaaaaaaaaaaaa/manhole_cover/models', 'finetune_resnet18.pth')
-NUM_CLASSES = 5  # 修改为你的类别数
+LOGGER = logging.getLogger(__name__)
 
-model = models.resnet18(pretrained=False)
-model.fc = torch.nn.Linear(model.fc.in_features, NUM_CLASSES)
-model.load_state_dict(torch.load(MODEL_PATH, map_location='cpu'))
-model.eval()
 
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
-
-def predict_image(image_path):
-    img = Image.open(image_path).convert('RGB')
-    input_tensor = transform(img).unsqueeze(0)
-    with torch.no_grad():
-        output = model(input_tensor)
-        pred = output.argmax(dim=1).item()
-    return f"[{pred}]"
-
-# 井盖信息分页查询接口
 class WellAPIView(APIView):
+    """Return paginated well records."""
+
     permission_classes = [AllowAny]
-    """井盖信息接口（支持分页查询）"""
+
     def get(self, request):
-        page = int(request.GET.get('page', 1))  # 页码
-        page_size = 10  # 每页10条
+        try:
+            page = max(int(request.query_params.get("page", 1)), 1)
+            page_size = min(max(int(request.query_params.get("page_size", 10)), 1), 100)
+        except ValueError:
+            return Response(
+                {"error": "page and page_size must be integers"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         start = (page - 1) * page_size
         end = start + page_size
 
-        # 查询数据并分页
-        well_list = Well.objects.all()[start:end]
-        total = Well.objects.count()  # 总条数
+        queryset = Well.objects.all().order_by("id")
+        total = queryset.count()
+        records = queryset[start:end]
 
-        return Response({
-            "wellData": WellSerializer(well_list, many=True).data,
-            "total": total
-        })
+        return Response(
+            {
+                "wellData": WellSerializer(records, many=True).data,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+        )
 
-# 井盖图片上传与自动检测接口
+
 class FileUploadView(APIView):
-    """文件上传接口（处理井盖图片上传）"""
+    """Upload image and return model inference result."""
+
     permission_classes = [AllowAny]
+
     def post(self, request):
-        # 获取上传的文件
-        file = request.FILES.get('upload_file')
-        if not file:
-            return Response({"error": "未上传文件"}, status=400)
+        uploaded_file = request.FILES.get("upload_file")
+        if uploaded_file is None:
+            return Response(
+                {"error": "upload_file is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # 保存文件到 static 目录
-        file_path = os.path.join(settings.STATIC_ROOT, file.name)
-        with open(file_path, 'wb') as f:
-            for chunk in file.chunks():
-                f.write(chunk)
+        file_extension = Path(uploaded_file.name).suffix.lower() or ".jpg"
+        if file_extension not in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
+            return Response(
+                {"error": "Unsupported file type"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # 调用模型进行预测（你可以替换为真实模型推理代码）
-        predicted_category = predict_image(file_path)
+        filename = f"{uuid.uuid4().hex}{file_extension}"
+        static_root = Path(settings.STATIC_ROOT)
+        static_root.mkdir(parents=True, exist_ok=True)
+        file_path = static_root / filename
 
-        return Response({
-            "path": f"/static/{file.name}",  # 图片路径
-            "label": predicted_category      # 预测结果
-        })
-
-# 井盖图片检测模型推理函数（需替换为你的真实模型代码）
-
-# 井盖标注信息更新接口
-class UpdateAnnotationView(APIView):
-    permission_classes = [AllowAny]
-    def put(self, request):
         try:
-            well_id = request.data.get('id')
-            well = Well.objects.get(id=well_id)
-            serializer = WellSerializer(well, data=request.data, partial=True)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        except Well.DoesNotExist:
-            return Response({"error": "数据不存在"}, status=status.HTTP_404_NOT_FOUND)
+            with file_path.open("wb") as output:
+                for chunk in uploaded_file.chunks():
+                    output.write(chunk)
 
-from rest_framework.viewsets import ModelViewSet
-from .models import Monitor
-from .serializers import MonitorSerializer
+            predicted_category = predict_image(file_path)
+        except InferenceError as exc:
+            LOGGER.warning("Inference failed for %s: %s", filename, exc)
+            if file_path.exists():
+                file_path.unlink(missing_ok=True)
+            return Response(
+                {"error": "Inference failed", "detail": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        except Exception as exc:  # pragma: no cover
+            LOGGER.exception("Upload failed: %s", exc)
+            if file_path.exists():
+                file_path.unlink(missing_ok=True)
+            return Response(
+                {"error": "Upload failed"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response({"path": f"/static/{filename}", "label": predicted_category})
+
+
+class UpdateAnnotationView(APIView):
+    """Update category/bbox annotation for a well record."""
+
+    permission_classes = [AllowAny]
+
+    def put(self, request):
+        well_id = request.data.get("id")
+        if not well_id:
+            return Response(
+                {"error": "id is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            well = Well.objects.get(id=well_id)
+        except Well.DoesNotExist:
+            return Response(
+                {"error": "Record not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = WellSerializer(well, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class MonitorViewSet(ModelViewSet):
+    """CRUD endpoints for monitor records."""
+
     permission_classes = [AllowAny]
-    queryset = Monitor.objects.all()
+    queryset = Monitor.objects.all().order_by("-time")
     serializer_class = MonitorSerializer

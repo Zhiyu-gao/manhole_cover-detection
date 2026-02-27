@@ -1,6 +1,6 @@
 from django.db import models
 
-# Create your models here.
+
 class Well(models.Model):
     id = models.CharField(primary_key=True, max_length=255)
     file_name = models.CharField(max_length=255, blank=True, null=True)
@@ -15,7 +15,8 @@ class Well(models.Model):
 
     class Meta:
         managed = False
-        db_table = 'well'
+        db_table = "well"
+
 
 class Monitor(models.Model):
     id = models.CharField(primary_key=True, max_length=255)
@@ -27,4 +28,4 @@ class Monitor(models.Model):
 
     class Meta:
         managed = False
-        db_table = 'monitor'
+        db_table = "monitor"
